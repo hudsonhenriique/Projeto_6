@@ -3,3 +3,7 @@
 
 # Arquivos de banco de dados VSAM simulados
 *.dat
+
+# Logs e Relatórios gerados pela execução
+RELATORIO.txt
+ERROS.txt

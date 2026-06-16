@@ -60,11 +60,29 @@
            05 WS-SALDO-ATUAL   PIC S9(09)V99 VALUE ZEROS.
            05 WS-MSG-ERRO      PIC X(50) VALUE SPACES.
 
+       01  WS-LINHA-DETALHE.
+           05 FILLER           PIC X(09) VALUE 'CLIENTE: '.
+           05 WS-DET-CLI       PIC 9(05).
+           05 FILLER           PIC X(07) VALUE ' | OP: '.
+           05 WS-DET-OP        PIC X(01).
+           05 FILLER           PIC X(10) VALUE ' | VALOR: '.
+           05 WS-DET-VALOR     PIC 9(09).
+           05 FILLER           PIC X(11) VALUE ' | STATUS: '.
+           05 WS-DET-STATUS    PIC X(28).
+
        PROCEDURE DIVISION.
        0000-PRINCIPAL.
            PERFORM 1000-INICIALIZAR.
            PERFORM 2000-PROCESSA-CLIENTES UNTIL WS-EOF-CLI = 'Y'.
-           PERFORM 3000-PROCESSA-TRANSACOES UNTIL WS-EOF-TRX = 'Y'.
+           
+           MOVE SPACES TO REL-REG.
+           STRING '--- RELATORIO DETALHADO DE TRANSACOES ---'
+                  DELIMITED BY SIZE INTO REL-REG.
+           WRITE REL-REG.
+           
+           PERFORM 3000-PROCESSA-TRANSACOES THRU 3999-FIM-TRANSACOES 
+               UNTIL WS-EOF-TRX = 'Y'.
+               
            PERFORM 4000-FINALIZAR.
            STOP RUN.
 
@@ -79,7 +97,6 @@
 
        2000-PROCESSA-CLIENTES.
            ADD 1 TO WS-TOT-CLI-LIDOS.
-
            MOVE CLI-REG-ID TO DB-CLI-ID.
            MOVE CLI-REG-NOME TO DB-CLI-NOME-TXT.
            MOVE 30 TO DB-CLI-NOME-TAM.
@@ -134,38 +151,35 @@
            IF SQLCODE = 100
                MOVE 'ERRO: CLIENTE INEXISTENTE' TO WS-MSG-ERRO
                PERFORM 3100-GRAVA-ERRO
-               GO TO 3000-PROXIMO-TRX.
+               GO TO 3999-FIM-TRANSACOES.
 
            IF TRX-REG-VALOR = ZEROS
                MOVE 'ERRO: VALOR DA TRANSACAO ZERADO' TO WS-MSG-ERRO
                PERFORM 3100-GRAVA-ERRO
-               GO TO 3000-PROXIMO-TRX.
+               GO TO 3999-FIM-TRANSACOES.
 
            IF TRX-REG-TIPO = 'D'
-               PERFORM 3200-CHECA-DEBITO
-           ELSE
-               PERFORM 3300-CHECA-CREDITO.
+               GO TO 3200-CHECA-DEBITO.
+               
+           IF TRX-REG-TIPO = 'C'
+               GO TO 3300-CHECA-CREDITO.
 
-       3000-PROXIMO-TRX.
-           READ TRX-FILE AT END MOVE 'Y' TO WS-EOF-TRX.
+           MOVE 'ERRO: TIPO INVALIDO' TO WS-MSG-ERRO.
+           PERFORM 3100-GRAVA-ERRO.
+           GO TO 3999-FIM-TRANSACOES.
 
        3200-CHECA-DEBITO.
            IF WS-SALDO-ATUAL < TRX-REG-VALOR
                MOVE 'ERRO: SALDO INSUFICIENTE' TO WS-MSG-ERRO
                PERFORM 3100-GRAVA-ERRO
-               GO TO 3000-PROXIMO-TRX
-           ELSE
-               SUBTRACT TRX-REG-VALOR FROM WS-SALDO-ATUAL
-               PERFORM 3400-ATUALIZA-DB.
+               GO TO 3999-FIM-TRANSACOES.
+
+           SUBTRACT TRX-REG-VALOR FROM WS-SALDO-ATUAL.
+           GO TO 3400-ATUALIZA-DB.
 
        3300-CHECA-CREDITO.
-           IF TRX-REG-TIPO = 'C'
-               ADD TRX-REG-VALOR TO WS-SALDO-ATUAL
-               PERFORM 3400-ATUALIZA-DB
-           ELSE
-               MOVE 'ERRO: TIPO INVALIDO' TO WS-MSG-ERRO
-               PERFORM 3100-GRAVA-ERRO
-               GO TO 3000-PROXIMO-TRX.
+           ADD TRX-REG-VALOR TO WS-SALDO-ATUAL.
+           GO TO 3400-ATUALIZA-DB.
 
        3400-ATUALIZA-DB.
            EXEC SQL
@@ -190,14 +204,30 @@
            PERFORM 8000-CHECA-SQLCODE.
 
            ADD 1 TO WS-TOT-TRX-PROC.
+           
+           MOVE TRX-REG-CLI-ID TO WS-DET-CLI.
+           MOVE TRX-REG-TIPO   TO WS-DET-OP.
+           MOVE TRX-REG-VALOR  TO WS-DET-VALOR.
+           MOVE 'PROCESSADO COM SUCESSO' TO WS-DET-STATUS.
+           WRITE REL-REG FROM WS-LINHA-DETALHE.
 
            ADD 1 TO WS-CONT-COMMIT.
            IF WS-CONT-COMMIT = 100
                EXEC SQL COMMIT END-EXEC
                MOVE ZEROS TO WS-CONT-COMMIT.
 
+       3999-FIM-TRANSACOES.
+           READ TRX-FILE AT END MOVE 'Y' TO WS-EOF-TRX.
+
        3100-GRAVA-ERRO.
            ADD 1 TO WS-TOT-TRX-ERRO.
+           
+           MOVE TRX-REG-CLI-ID TO WS-DET-CLI.
+           MOVE TRX-REG-TIPO   TO WS-DET-OP.
+           MOVE TRX-REG-VALOR  TO WS-DET-VALOR.
+           MOVE WS-MSG-ERRO    TO WS-DET-STATUS.
+           WRITE REL-REG FROM WS-LINHA-DETALHE.
+
            MOVE SPACES TO ERR-REG.
            STRING 'CLI_ID: ' TRX-REG-CLI-ID ' - ' WS-MSG-ERRO
                   DELIMITED BY SIZE INTO ERR-REG.
@@ -226,8 +256,11 @@
 
        4000-FINALIZAR.
            EXEC SQL COMMIT END-EXEC.
+           
            MOVE SPACES TO REL-REG.
-           STRING '--- RELATORIO DE PROCESSAMENTO DB2 ---'
+           WRITE REL-REG.
+           MOVE SPACES TO REL-REG.
+           STRING '--- RESUMO DE PROCESSAMENTO DB2 ---'
                   DELIMITED BY SIZE INTO REL-REG.
            WRITE REL-REG.
 
@@ -252,3 +285,4 @@
            WRITE REL-REG.
 
            CLOSE CLI-FILE TRX-FILE REL-FILE ERR-FILE.
+           
