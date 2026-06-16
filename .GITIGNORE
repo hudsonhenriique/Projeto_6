@@ -1,0 +1,5 @@
+# Executáveis do GnuCOBOL
+*.exe
+
+# Arquivos de banco de dados VSAM simulados
+*.dat

@@ -1,0 +1,254 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. BANKAPP.
+       AUTHOR. HUDSON.
+
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT CLI-FILE ASSIGN TO UT-S-CLIENTES.
+           SELECT TRX-FILE ASSIGN TO UT-S-MOVI.
+           SELECT REL-FILE ASSIGN TO UT-S-RELATORI.
+           SELECT ERR-FILE ASSIGN TO UT-S-ERROS.
+
+       DATA DIVISION.
+       FILE SECTION.
+       FD  CLI-FILE
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 44 CHARACTERS.
+       01  CLI-REG.
+           05 CLI-REG-ID       PIC 9(05).
+           05 CLI-REG-NOME     PIC X(30).
+           05 CLI-REG-SALDO    PIC 9(09).
+
+       FD  TRX-FILE
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 20 CHARACTERS.
+       01  TRX-REG.
+           05 TRX-REG-CLI-ID   PIC 9(05).
+           05 TRX-REG-TRX-ID   PIC 9(05).
+           05 TRX-REG-TIPO     PIC X(01).
+           05 TRX-REG-VALOR    PIC 9(09).
+
+       FD  REL-FILE
+           LABEL RECORDS ARE OMITTED
+           RECORD CONTAINS 80 CHARACTERS.
+       01  REL-REG             PIC X(80).
+
+       FD  ERR-FILE
+           LABEL RECORDS ARE OMITTED
+           RECORD CONTAINS 100 CHARACTERS.
+       01  ERR-REG             PIC X(100).
+
+       WORKING-STORAGE SECTION.
+           EXEC SQL INCLUDE SQLCA END-EXEC.
+           EXEC SQL INCLUDE CLICOPY END-EXEC.
+           EXEC SQL INCLUDE TRXCOPY END-EXEC.
+           EXEC SQL INCLUDE ERRCOPY END-EXEC.
+
+       01  WS-COUNTERS.
+           05 WS-CONT-COMMIT   PIC 9(04) VALUE ZEROS.
+           05 WS-TOT-CLI-LIDOS PIC 9(06) VALUE ZEROS.
+           05 WS-TOT-TRX-LIDOS PIC 9(06) VALUE ZEROS.
+           05 WS-TOT-TRX-PROC  PIC 9(06) VALUE ZEROS.
+           05 WS-TOT-TRX-ERRO  PIC 9(06) VALUE ZEROS.
+           05 WS-EOF-CLI       PIC X(01) VALUE 'N'.
+           05 WS-EOF-TRX       PIC X(01) VALUE 'N'.
+
+       01  WS-WORK-VARIABLES.
+           05 WS-SALDO-ATUAL   PIC S9(09)V99 VALUE ZEROS.
+           05 WS-MSG-ERRO      PIC X(50) VALUE SPACES.
+
+       PROCEDURE DIVISION.
+       0000-PRINCIPAL.
+           PERFORM 1000-INICIALIZAR.
+           PERFORM 2000-PROCESSA-CLIENTES UNTIL WS-EOF-CLI = 'Y'.
+           PERFORM 3000-PROCESSA-TRANSACOES UNTIL WS-EOF-TRX = 'Y'.
+           PERFORM 4000-FINALIZAR.
+           STOP RUN.
+
+       1000-INICIALIZAR.
+           OPEN INPUT  CLI-FILE
+                INPUT  TRX-FILE
+                OUTPUT REL-FILE
+                OUTPUT ERR-FILE.
+
+           READ CLI-FILE AT END MOVE 'Y' TO WS-EOF-CLI.
+           READ TRX-FILE AT END MOVE 'Y' TO WS-EOF-TRX.
+
+       2000-PROCESSA-CLIENTES.
+           ADD 1 TO WS-TOT-CLI-LIDOS.
+
+           MOVE CLI-REG-ID TO DB-CLI-ID.
+           MOVE CLI-REG-NOME TO DB-CLI-NOME-TXT.
+           MOVE 30 TO DB-CLI-NOME-TAM.
+           MOVE CLI-REG-SALDO TO DB-CLI-SALDO.
+           MOVE '2026-06-16' TO DB-DT-ATUALIZACAO.
+
+           EXEC SQL
+               SELECT CLI_ID INTO :DB-CLI-ID
+               FROM CLIENTES
+               WHERE CLI_ID = :DB-CLI-ID
+           END-EXEC.
+
+           IF SQLCODE = 100
+               PERFORM 2100-INSERE-CLIENTE
+           ELSE
+               PERFORM 2200-ATUALIZA-CLIENTE.
+
+           READ CLI-FILE AT END MOVE 'Y' TO WS-EOF-CLI.
+
+       2100-INSERE-CLIENTE.
+           EXEC SQL
+               INSERT INTO CLIENTES
+               (CLI_ID, CLI_NOME, CLI_SALDO, DT_ATUALIZACAO)
+               VALUES
+               (:DB-CLI-ID, :DB-CLI-NOME, :DB-CLI-SALDO, CURRENT DATE)
+           END-EXEC.
+           PERFORM 8000-CHECA-SQLCODE.
+
+       2200-ATUALIZA-CLIENTE.
+           IF SQLCODE = 0
+               EXEC SQL
+                   UPDATE CLIENTES
+                      SET CLI_NOME = :DB-CLI-NOME,
+                          CLI_SALDO = :DB-CLI-SALDO,
+                          DT_ATUALIZACAO = CURRENT DATE
+                    WHERE CLI_ID = :DB-CLI-ID
+               END-EXEC
+               PERFORM 8000-CHECA-SQLCODE
+           ELSE
+               PERFORM 8000-CHECA-SQLCODE.
+
+       3000-PROCESSA-TRANSACOES.
+           ADD 1 TO WS-TOT-TRX-LIDOS.
+           MOVE TRX-REG-CLI-ID TO DB-TRX-CLI-ID.
+
+           EXEC SQL
+               SELECT CLI_SALDO INTO :WS-SALDO-ATUAL
+               FROM CLIENTES
+               WHERE CLI_ID = :DB-TRX-CLI-ID
+           END-EXEC.
+
+           IF SQLCODE = 100
+               MOVE 'ERRO: CLIENTE INEXISTENTE' TO WS-MSG-ERRO
+               PERFORM 3100-GRAVA-ERRO
+               GO TO 3000-PROXIMO-TRX.
+
+           IF TRX-REG-VALOR = ZEROS
+               MOVE 'ERRO: VALOR DA TRANSACAO ZERADO' TO WS-MSG-ERRO
+               PERFORM 3100-GRAVA-ERRO
+               GO TO 3000-PROXIMO-TRX.
+
+           IF TRX-REG-TIPO = 'D'
+               PERFORM 3200-CHECA-DEBITO
+           ELSE
+               PERFORM 3300-CHECA-CREDITO.
+
+       3000-PROXIMO-TRX.
+           READ TRX-FILE AT END MOVE 'Y' TO WS-EOF-TRX.
+
+       3200-CHECA-DEBITO.
+           IF WS-SALDO-ATUAL < TRX-REG-VALOR
+               MOVE 'ERRO: SALDO INSUFICIENTE' TO WS-MSG-ERRO
+               PERFORM 3100-GRAVA-ERRO
+               GO TO 3000-PROXIMO-TRX
+           ELSE
+               SUBTRACT TRX-REG-VALOR FROM WS-SALDO-ATUAL
+               PERFORM 3400-ATUALIZA-DB.
+
+       3300-CHECA-CREDITO.
+           IF TRX-REG-TIPO = 'C'
+               ADD TRX-REG-VALOR TO WS-SALDO-ATUAL
+               PERFORM 3400-ATUALIZA-DB
+           ELSE
+               MOVE 'ERRO: TIPO INVALIDO' TO WS-MSG-ERRO
+               PERFORM 3100-GRAVA-ERRO
+               GO TO 3000-PROXIMO-TRX.
+
+       3400-ATUALIZA-DB.
+           EXEC SQL
+               UPDATE CLIENTES
+                  SET CLI_SALDO = :WS-SALDO-ATUAL,
+                      DT_ATUALIZACAO = CURRENT DATE
+                WHERE CLI_ID = :DB-TRX-CLI-ID
+           END-EXEC.
+           PERFORM 8000-CHECA-SQLCODE.
+
+           MOVE TRX-REG-TRX-ID TO DB-TRX-ID.
+           MOVE TRX-REG-TIPO TO DB-TRX-TIPO.
+           MOVE TRX-REG-VALOR TO DB-TRX-VALOR.
+
+           EXEC SQL
+               INSERT INTO TRANSACOES
+               (TRX_ID, CLI_ID, TRX_TIPO, TRX_VALOR, DT_PROCESSAMENTO)
+               VALUES
+               (:DB-TRX-ID, :DB-TRX-CLI-ID, :DB-TRX-TIPO, :DB-TRX-VALOR,
+                CURRENT DATE)
+           END-EXEC.
+           PERFORM 8000-CHECA-SQLCODE.
+
+           ADD 1 TO WS-TOT-TRX-PROC.
+
+           ADD 1 TO WS-CONT-COMMIT.
+           IF WS-CONT-COMMIT = 100
+               EXEC SQL COMMIT END-EXEC
+               MOVE ZEROS TO WS-CONT-COMMIT.
+
+       3100-GRAVA-ERRO.
+           ADD 1 TO WS-TOT-TRX-ERRO.
+           MOVE SPACES TO ERR-REG.
+           STRING 'CLI_ID: ' TRX-REG-CLI-ID ' - ' WS-MSG-ERRO
+                  DELIMITED BY SIZE INTO ERR-REG.
+           WRITE ERR-REG.
+
+           MOVE DB-TRX-CLI-ID TO DB-ERR-CLI-ID.
+           MOVE WS-MSG-ERRO TO DB-ERR-DESC-TXT.
+           MOVE 50 TO DB-ERR-DESC-TAM.
+
+           EXEC SQL
+               INSERT INTO ERROS_PROCESSAMENTO
+               (CLI_ID, DESCRICAO_ERRO, DT_OCORRENCIA)
+               VALUES
+               (:DB-ERR-CLI-ID, :DB-ERR-DESC, CURRENT TIMESTAMP)
+           END-EXEC.
+           PERFORM 8000-CHECA-SQLCODE.
+
+       8000-CHECA-SQLCODE.
+           IF SQLCODE < 0
+               MOVE SPACES TO ERR-REG
+               STRING 'ERRO FATAL DB2. SQLCODE: ' SQLCODE
+                      DELIMITED BY SIZE INTO ERR-REG
+               WRITE ERR-REG
+               EXEC SQL ROLLBACK END-EXEC
+               STOP RUN.
+
+       4000-FINALIZAR.
+           EXEC SQL COMMIT END-EXEC.
+           MOVE SPACES TO REL-REG.
+           STRING '--- RELATORIO DE PROCESSAMENTO DB2 ---'
+                  DELIMITED BY SIZE INTO REL-REG.
+           WRITE REL-REG.
+
+           MOVE SPACES TO REL-REG.
+           STRING 'TOTAL CLIENTES LIDOS: ' WS-TOT-CLI-LIDOS
+                  DELIMITED BY SIZE INTO REL-REG.
+           WRITE REL-REG.
+
+           MOVE SPACES TO REL-REG.
+           STRING 'TOTAL TRX LIDAS:      ' WS-TOT-TRX-LIDOS
+                  DELIMITED BY SIZE INTO REL-REG.
+           WRITE REL-REG.
+
+           MOVE SPACES TO REL-REG.
+           STRING 'TOTAL TRX SUCESSO:    ' WS-TOT-TRX-PROC
+                  DELIMITED BY SIZE INTO REL-REG.
+           WRITE REL-REG.
+
+           MOVE SPACES TO REL-REG.
+           STRING 'TOTAL TRX ERRO:       ' WS-TOT-TRX-ERRO
+                  DELIMITED BY SIZE INTO REL-REG.
+           WRITE REL-REG.
+
+           CLOSE CLI-FILE TRX-FILE REL-FILE ERR-FILE.
