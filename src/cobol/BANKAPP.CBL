@@ -246,13 +246,41 @@
            PERFORM 8000-CHECA-SQLCODE.
 
        8000-CHECA-SQLCODE.
+           IF SQLCODE = 0
+               GO TO 8099-FIM-CHECA.
+
+           IF SQLCODE = 100
+               GO TO 8099-FIM-CHECA.
+
+           IF SQLCODE = -803
+               MOVE 'DB2 ERROR: DUPLICATE KEY VIOLATION (-803)'
+                 TO ERR-REG
+               PERFORM 8100-ABORT-PROGRAM.
+
+           IF SQLCODE = -530
+               MOVE 'DB2 ERROR: FOREIGN KEY VIOLATION (-530)'
+                 TO ERR-REG
+               PERFORM 8100-ABORT-PROGRAM.
+
+           IF SQLCODE = -911
+               MOVE 'DB2 ERROR: DEADLOCK OR TIMEOUT (-911)'
+                 TO ERR-REG
+               PERFORM 8100-ABORT-PROGRAM.
+
            IF SQLCODE < 0
                MOVE SPACES TO ERR-REG
-               STRING 'ERRO FATAL DB2. SQLCODE: ' SQLCODE
+               STRING 'FATAL DB2 ERROR. SQLCODE: ' SQLCODE
                       DELIMITED BY SIZE INTO ERR-REG
-               WRITE ERR-REG
-               EXEC SQL ROLLBACK END-EXEC
-               STOP RUN.
+               PERFORM 8100-ABORT-PROGRAM.
+
+       8099-FIM-CHECA.
+           EXIT.
+
+       8100-ABORT-PROGRAM.
+           WRITE ERR-REG.
+           DISPLAY ERR-REG.
+           EXEC SQL ROLLBACK END-EXEC.
+           STOP RUN.
 
        4000-FINALIZAR.
            EXEC SQL COMMIT END-EXEC.
